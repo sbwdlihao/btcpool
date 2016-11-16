@@ -11,22 +11,13 @@ import (
 	"github.com/golang/glog"
 	"github.com/btcpool/database"
 	"github.com/btcpool/sserver"
+	"github.com/btcpool/config"
+	"github.com/btcrpcclient" // todo replace it
+	"github.com/btcpool/gbtmaker"
 )
 
 func usage() {
 	fmt.Fprintln(os.Stderr, "Usage:\n\tbtcpool -c \"config.yml\" -l \"log_dir\"\n")
-}
-
-type config struct {
-	Testnet bool
-	Kafka   struct {
-			Brokers string
-		}
-	Sserver sserver.SserverConfig
-	Users struct {
-			List_id_api_url string
-		}
-	Pooldb database.MysqlConnectInfo
 }
 
 func main() {
@@ -59,7 +50,7 @@ func main() {
 		glog.Error("read file failed: ", err)
 		os.Exit(1)
 	}
-	cfg := config{}
+	cfg := config.BtcPoolConfig{}
 	err = yaml.Unmarshal(bytes, &cfg)
 	if err != nil {
 		glog.Error("sserver config parse failed: ", err)
@@ -79,45 +70,64 @@ func main() {
 		os.Exit(1)
 	}
 
+	btc_rpc_client_config := &btcrpcclient.ConnConfig{
+		Host: cfg.Bitcoind.Rpc_addr,
+		User: cfg.Bitcoind.Rpc_user,
+		Pass: cfg.Bitcoind.Rpc_password,
+		HTTPPostMode: true, // Bitcoin core only supports HTTP POST mode
+		DisableTLS: true, // Bitcoin core does not provide TLS by default
+	}
+	btc_rpc_client, err := btcrpcclient.New(btc_rpc_client_config, nil)
+	if err != nil {
+		glog.Error("bitcoind rpc connect failed: ", err)
+		os.Exit(1)
+	}
+
 	// todo try lock file
 
 	var stratum_server *sserver.StratumServer
+	var gbt_maker *gbtmaker.GbtMaker
+
+
+
+	// create mysql connection and stratum server
+	mysql_connection := database.NewMysqlConnection(cfg.Pooldb)
+	stratum_server = sserver.NewStratumServer(cfg.Sserver, cfg.Kafka.Brokers, cfg.Users.List_id_api_url, mysql_connection)
+	if err := stratum_server.Init(); err != nil {
+		glog.Error(err)
+		os.Exit(1)
+	}
+	if err := stratum_server.Run(); err != nil {
+		glog.Error(err)
+		os.Exit(1)
+	}
+
+	gbt_maker = gbtmaker.NewGbtMaker(cfg.GbtMaker, cfg.Bitcoind, cfg.Kafka.Brokers, btc_rpc_client)
+	if err := gbt_maker.Init(); err != nil {
+		glog.Error(err)
+		os.Exit(1)
+	}
+	go func() {
+		if err := gbt_maker.Run(); err != nil {
+			glog.Error(err)
+		}
+	}()
+
 
 	// wait ctrl+c or terminal
 	sigs := make(chan os.Signal, 1)
 	sig_done := make(chan bool, 1)
 	signal.Notify(sigs, syscall.SIGINT, syscall.SIGTERM)
 
-	stopSignal := func() {
-		signal.Stop(sigs)
-		sig_done <- true
-	}
-
 	go func() {
 		<-sigs
-		fmt.Println("manual stop")
 		if stratum_server != nil {
 			if err := stratum_server.Stop(); err != nil {
 				glog.Error(err)
 			}
 		}
-		stopSignal()
-	}()
-
-	// create mysql connection and stratum server
-	mysqlConnection := database.NewMysqlConnection(&cfg.Pooldb)
-	stratum_server = sserver.NewStratumServer(&cfg.Sserver, cfg.Kafka.Brokers, cfg.Users.List_id_api_url, mysqlConnection)
-
-	go func() {
-		if err := stratum_server.Init(); err != nil {
-			glog.Error(err)
-			stopSignal()
-			return
-		}
-		if err := stratum_server.Run(); err != nil {
-			glog.Error(err)
-			stopSignal()
-		}
+		signal.Stop(sigs)
+		sig_done <- true
 	}()
 
 	<-sig_done

@@ -1,15 +1,10 @@
 package database
 
 import "database/sql"
-import _ "github.com/go-sql-driver/mysql"
-
-type MysqlConnectInfo struct {
-	Host     string
-	Port     string
-	Username string
-	Password string
-	Dbname   string
-}
+import (
+	_ "github.com/go-sql-driver/mysql"
+	"github.com/btcpool/config"
+)
 
 type mysqlConnectionInterface interface {
 	open() error
@@ -17,11 +12,11 @@ type mysqlConnectionInterface interface {
 }
 
 type MysqlConnection struct {
-	dbInfo *MysqlConnectInfo
+	dbInfo config.MysqlConnectConfig
 	db *sql.DB
 }
 
-func NewMysqlConnection(dbInfo *MysqlConnectInfo) *MysqlConnection {
+func NewMysqlConnection(dbInfo config.MysqlConnectConfig) *MysqlConnection {
 	return &MysqlConnection{
 		dbInfo: dbInfo,
 	}

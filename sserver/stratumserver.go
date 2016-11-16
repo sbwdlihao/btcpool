@@ -7,16 +7,8 @@ import (
 	"github.com/Shopify/sarama"
 	"github.com/btcpool/database"
 	"github.com/btcpool/kafka"
+	"github.com/btcpool/config"
 )
-
-type SserverConfig struct {
-	Ip                          string
-	Port                        uint32
-	Id                          uint8
-	File_last_notify_time       string
-	Enable_simulator            bool
-	Enable_submit_invalid_block bool
-}
 
 type StratumServerInterface interface {
 	Init() error
@@ -26,7 +18,7 @@ type StratumServerInterface interface {
 
 type StratumServer struct {
 	running int32
-	config *SserverConfig
+	config config.SserverConfig
 	kafkaBrokers string
 	userAPIUrl string
 	mysqlConnection *database.MysqlConnection
@@ -40,7 +32,7 @@ type StratumServer struct {
 	JobRepository *JobRepository
 }
 
-func NewStratumServer(config *SserverConfig, kafkaBrokers string, userAPIUrl string, mysqlConnection *database.MysqlConnection) *StratumServer {
+func NewStratumServer(config config.SserverConfig, kafkaBrokers string, userAPIUrl string, mysqlConnection *database.MysqlConnection) *StratumServer {
 	return &StratumServer{
 		config: config,
 		kafkaBrokers: kafkaBrokers,

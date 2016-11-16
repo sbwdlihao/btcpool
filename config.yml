@@ -44,3 +44,17 @@ pooldb:
   username: dbusername
   password: dbpassword
   dbname: ""
+
+gbtmaker:
+  # rpc call interval seconds
+  rpcinterval: 5
+  # check zmq when startup
+  is_check_zmq: true
+
+bitcoind:
+  # bitcoind MUST with zmq options: -zmqpubhashblock, -zmqpubhashtx
+  # '-zmqpubhashtx' will use to check zmq is working when startup gbtmaker
+  zmq_addr: tcp://127.0.0.1:8331
+  rpc_addr: "" # http://127.0.0.1:8332
+  rpc_user: "" # username
+  rpc_password: "" # password
