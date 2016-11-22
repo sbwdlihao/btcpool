@@ -12,7 +12,7 @@ import (
 	"github.com/btcpool/database"
 	"github.com/btcpool/sserver"
 	"github.com/btcpool/config"
-	"github.com/btcrpcclient" // todo replace it
+	"github.com/btcrpcclient"
 	"github.com/btcpool/gbtmaker"
 )
 

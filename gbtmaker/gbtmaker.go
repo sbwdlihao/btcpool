@@ -4,7 +4,7 @@ import (
 	"github.com/btcpool/kafka"
 	"github.com/btcpool/config"
 	"time"
-	"github.com/btcrpcclient" // todo replace
+	"github.com/btcrpcclient"
 	"github.com/golang/glog"
 	"errors"
 	"github.com/pebbe/zmq4"
@@ -76,14 +76,8 @@ func (maker *GbtMaker) Init() error {
 		return err
 	}
 
-	info, err := maker.bitcoindRpcClient.GetInfo()
-	if err != nil {
+	if err := maker.checkBitcoind(); err != nil {
 		return err
-	}
-	glog.Info("bitcoind getinfo: ", info)
-
-	if info.Connections <= 0 {
-		return errors.New("bitcoind connections is zero")
 	}
 
 	if maker.isCheckZmq {
@@ -155,8 +149,8 @@ func (maker *GbtMaker) Run() error {
 	runDone:
 		for {
 			select {
-			case msg, err := <- msg_chan:
-				if err != nil {
+			case msg, ok := <- msg_chan:
+				if ok {
 					handleMsg(msg)
 					go recvMsg()
 				}
@@ -174,6 +168,20 @@ func (maker *GbtMaker) Stop() error {
 	return nil
 }
 
+func (maker *GbtMaker) checkBitcoind() error {
+	info, err := maker.bitcoindRpcClient.GetInfo()
+	if err != nil {
+		return err
+	}
+	glog.Infof("bitcoind getinfo: %+v", info)
+
+	if info.Connections <= 0 {
+		return errors.New("bitcoind connections is zero")
+	}
+	return nil
+}
+
+// call this method will block go routine
 func (maker *GbtMaker) checkBitcoindZMQ() error {
 	subscriber, err := zmq4.NewSocket(zmq4.SUB)
 	if err != nil {
@@ -187,18 +195,19 @@ func (maker *GbtMaker) checkBitcoindZMQ() error {
 	subscriber.SetSubscribe(BitcoindZMQHashTX)
 	// wait for hashtx
 	glog.Info("check bitcoind zmq, waiting for zmq message 'hashtx'...")
-	msg, err := subscriber.RecvMessageBytes(zmq4.DONTWAIT)
+	bytes, err := subscriber.RecvBytes(0)
 	if err != nil {
 		return err
 	}
-	if len(msg) != 2 {
-		return fmt.Errorf("unknown message: %s", msg)
-	}
-	msg_type := string(msg[0])
-	hashtx := hex.EncodeToString(msg[1])
+	msg_type := string(bytes)
 	if msg_type != BitcoindZMQHashTX {
 		return fmt.Errorf("invalid message type: %s", msg_type)
 	}
+	bytes, err = subscriber.RecvBytes(0)
+	if err != nil {
+		return err
+	}
+	hashtx := hex.EncodeToString(bytes)
 	glog.Info("bitcoind zmq recv hashtx: ", hashtx)
 	return nil
 }
@@ -226,25 +235,39 @@ func (maker *GbtMaker) submitRawGbtMsg(checkTime bool) error {
 
 func (maker *GbtMaker) makeRawGbtMsg() (string, error) {
 	request := &btcjson.TemplateRequest{}
-	template_result, err := maker.bitcoindRpcClient.GetBlockTemplate(request)
+	result, err := maker.bitcoindRpcClient.GetBlockTemplate(request)
 	if err != nil {
-		return nil, err
+		return "", err
 	}
-	template, err := json.Marshal(template_result)
+	template, err := json.Marshal(result)
 	if err != nil {
-		return nil, err
+		return "", err
 	}
 	template_string := string(template)
 	hash := sha256.New()
 	hash.Write(template)
-	gbthash := string(hash.Sum(nil))
+	gbthash := hex.EncodeToString(hash.Sum(nil))
+	glog.Infof("gbt height: %d, " +
+		"prev_hash: %s, " +
+		"coinbase_value: %v, " +
+		"bits: %s, " +
+		"mintime: %d, " +
+		"version: %d|0x%x, " +
+		"gbthash: %s",
+		result.Height,
+		result.PreviousHash,
+		result.CoinbaseValue,
+		result.Bits,
+		result.MinTime,
+		result.Version, result.Version,
+		gbthash)
 	msg, err := json.Marshal(map[string]string{
-		"created_at_ts": time.Now().Format(time.RFC3339),
+		"created_at": time.Now().Format(time.RFC3339),
 		"block_template": template_string,
 		"gbthash": gbthash,
 	})
 	if err != nil {
-		return nil, err
+		return "", err
 	}
-	return string(msg)
+	return string(msg), nil
 }
