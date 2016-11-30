@@ -1,7 +1,8 @@
 package config
 
 type BtcPoolConfig struct {
-	Testnet  bool
+	Network  string
+	Payout_address string
 	Kafka    struct {
 			Brokers string
 		}
@@ -10,8 +11,9 @@ type BtcPoolConfig struct {
 			List_id_api_url string
 		}
 	Pooldb   MysqlConnectConfig
-	GbtMaker GbtMakerConfig
+	Gbtmaker GbtMakerConfig
 	Bitcoind BitcoindConfig
+	Jobmaker JobMakerConfig
 }
 
 type SserverConfig struct {
@@ -41,4 +43,10 @@ type BitcoindConfig struct {
 	Rpc_addr string
 	Rpc_user string
 	Rpc_password string
+}
+
+type JobMakerConfig struct {
+	Stratum_job_interval uint
+	Gbt_life_time uint
+	File_last_job_time string
 }

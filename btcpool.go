@@ -14,6 +14,7 @@ import (
 	"github.com/btcpool/config"
 	"github.com/btcrpcclient"
 	"github.com/btcpool/gbtmaker"
+	"github.com/btcsuite/btcd/chaincfg"
 )
 
 func usage() {
@@ -57,12 +58,18 @@ func main() {
 		os.Exit(1)
 	}
 
-	// check if we are using testnet3
-	if cfg.Testnet {
-		// todo set chain network to testnet
-		glog.Warning("using bitcoin testnet3")
-	} else {
-		// todo set chain network to main
+	var chainParams chaincfg.Params
+	switch cfg.Network {
+	case "mainnet": chainParams = chaincfg.MainNetParams
+	case "testnet3": chainParams = chaincfg.TestNet3Params
+	case "regtest": chainParams = chaincfg.RegressionNetParams
+	case "simnet": chainParams = chaincfg.SimNetParams
+	default:
+		glog.Error("invalide network name ", cfg.Network)
+		os.Exit(1)
+	}
+	if chainParams.Name != "mainnet" {
+		glog.Warning("not using bitcoin mainnet")
 	}
 
 	if !(cfg.Sserver.Id >= 1 && cfg.Sserver.Id <= 255) {
@@ -85,6 +92,7 @@ func main() {
 
 	// todo try lock file
 
+
 	var stratum_server *sserver.StratumServer
 	var gbt_maker *gbtmaker.GbtMaker
 
@@ -102,7 +110,7 @@ func main() {
 		os.Exit(1)
 	}
 
-	gbt_maker = gbtmaker.NewGbtMaker(cfg.GbtMaker, cfg.Bitcoind, cfg.Kafka.Brokers, btc_rpc_client)
+	gbt_maker = gbtmaker.NewGbtMaker(cfg.Gbtmaker, cfg.Bitcoind.Zmq_addr, cfg.Kafka.Brokers, btc_rpc_client)
 	if err := gbt_maker.Init(); err != nil {
 		glog.Error(err)
 		os.Exit(1)
@@ -133,3 +141,4 @@ func main() {
 	<-sig_done
 	glog.Flush()
 }
+

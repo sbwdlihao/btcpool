@@ -6,7 +6,9 @@
 #
 
 # is using testnet3
-testnet: true
+network: "regtest"
+
+payout_address: mt4BFpmdbGft3Q8eQDo5ehUVNq99uzBugy
 
 kafka:
   brokers: 1.1.1.1:9092,2.2.2.2:9092,3.3.3.3:9092
@@ -58,3 +60,11 @@ bitcoind:
   rpc_addr: "" # http://127.0.0.1:8332
   rpc_user: "" # username
   rpc_password: "" # password
+
+jobmaker:
+  #  submit stratum job interval seconds
+  stratum_job_interval: 10
+  # max gbt life cycle time seconds
+  gbt_life_time: 60
+  # write last stratum job send time to file
+  file_last_job_time: /work/xxx/jobmaker_lastjobtime.txt

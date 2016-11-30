@@ -6,6 +6,9 @@ import (
 	"github.com/golang/glog"
 	"flag"
 	"github.com/btcrpcclient"
+	"github.com/btcpool/config"
+	"time"
+	"sync"
 )
 
 var maker *GbtMaker
@@ -24,11 +27,14 @@ func TestMain(m *testing.M) {
 		glog.Error("bitcoind rpc connect failed: ", err)
 		os.Exit(1)
 	}
-	maker = &GbtMaker{
-		zmqBitcoindAddr: "tcp://127.0.0.1:28332",
-		bitcoindRpcClient: btc_rpc_client,
+	gbkmakerConfig := config.GbtMakerConfig{
+		Rpcinterval: 5,
+		Is_check_zmq: true,
 	}
-	os.Exit(m.Run())
+	maker = NewGbtMaker(gbkmakerConfig, "tcp://127.0.0.1:28332", "localhost:9092,localhost:9093,localhost:9094", btc_rpc_client)
+	code := m.Run()
+	glog.Flush()
+	os.Exit(code)
 }
 
 func TestCheckBitcoind(t *testing.T)  {
@@ -50,5 +56,30 @@ func TestMakeRawGbtMsg(t *testing.T)  {
 	} else {
 		glog.Info(msg)
 	}
+}
+
+func TestGbtMaker_Run(t *testing.T) {
+	if err := maker.Init(); err != nil {
+		glog.Error(err)
+		return
+	}
+
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go func() {
+		if err := maker.Run(); err != nil {
+			glog.Error(err)
+		}
+		wg.Done()
+	}()
+
+	wg.Add(1)
+	go func() {
+		time.Sleep(60 * time.Second)
+		maker.Stop()
+		wg.Done()
+	} ()
+
+	wg.Wait()
 }
 

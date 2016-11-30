@@ -9,6 +9,7 @@ import (
 )
 
 const (
+	ClientId string = "btcpool"
 	KafkaTopicRawGBT string = "RawGbt"
 	KafkaTopicStratumJob string = "StratumJob"
 	KafkaTopicSolvedShare string = "SolvedShare"
@@ -51,13 +52,12 @@ func NewKafkaProducer(brokers string, topic string) *KafkaProducer {
 		topic: topic,
 	}
 	producer.Conf = sarama.NewConfig()
+	producer.Conf.ClientID = ClientId
 	producer.Conf.Producer.MaxMessageBytes = 20000000
 	producer.Conf.Producer.Compression = sarama.CompressionSnappy
 	producer.Conf.Producer.Flush.MaxMessages = 100000
 	producer.Conf.Producer.Flush.Frequency = 1000 * time.Millisecond
 	producer.Conf.Producer.Flush.Messages = 1000
-
-	// todo redirect kafka log
 
 	return producer
 }
@@ -108,10 +108,9 @@ func NewKafkaConsumer(brokers string, topic string, partition int32) *KafkaConsu
 		partition:partition,
 	}
 	consumer.Conf = sarama.NewConfig()
+	consumer.Conf.ClientID = ClientId
 	consumer.Conf.Consumer.Fetch.Default = 20000000
 	consumer.Conf.Consumer.MaxWaitTime = 10 * time.Millisecond
-
-	// todo redirect kafka log
 
 	return consumer
 }
