@@ -47,6 +47,11 @@ pooldb:
   password: dbpassword
   dbname: ""
 
+redis:
+  addr: "localhost:6379" # host:port
+  password: ""
+  db: ""
+
 gbtmaker:
   # rpc call interval seconds
   rpcinterval: 5
@@ -62,9 +67,7 @@ bitcoind:
   rpc_password: "" # password
 
 jobmaker:
-  #  submit stratum job interval seconds
-  stratum_job_interval: 10
-  # max gbt life cycle time seconds
-  gbt_life_time: 60
+  pool_coinbase: /BTC.COM/
+  block_version: 0x20000000
   # write last stratum job send time to file
   file_last_job_time: /work/xxx/jobmaker_lastjobtime.txt

@@ -11,6 +11,7 @@ type BtcPoolConfig struct {
 			List_id_api_url string
 		}
 	Pooldb   MysqlConnectConfig
+	Redis RedisConfig
 	Gbtmaker GbtMakerConfig
 	Bitcoind BitcoindConfig
 	Jobmaker JobMakerConfig
@@ -33,8 +34,14 @@ type MysqlConnectConfig struct {
 	Dbname   string
 }
 
+type RedisConfig struct {
+	Address string
+	Password string
+	DB int
+}
+
 type GbtMakerConfig struct {
-	Rpcinterval uint
+	Rpcinterval int64
 	Is_check_zmq bool
 }
 
@@ -46,7 +53,7 @@ type BitcoindConfig struct {
 }
 
 type JobMakerConfig struct {
-	Stratum_job_interval uint
-	Gbt_life_time uint
+	Pool_coinbase string
+	Block_version int32
 	File_last_job_time string
 }

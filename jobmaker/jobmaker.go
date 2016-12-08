@@ -1,14 +1,18 @@
 package jobmaker
 
 import (
+	"encoding/json"
+	"github.com/Shopify/sarama"
+	"github.com/btcpool/gbtmaker"
 	"github.com/btcpool/kafka"
 	"github.com/btcsuite/btcd/chaincfg"
 	"github.com/btcsuite/btcutil"
+	"github.com/golang/glog"
 	"time"
-	"github.com/Shopify/sarama"
-	"github.com/ethereum/go-ethereum/logger/glog"
-	"encoding/json"
-	"github.com/btcpool/gbtmaker"
+	"gopkg.in/redis.v5"
+	"github.com/btcpool/config"
+	"github.com/btcpool/sserver"
+	"errors"
 )
 
 type JobMakerInterface interface {
@@ -18,22 +22,28 @@ type JobMakerInterface interface {
 }
 
 type JobMaker struct {
-	kafkaProducer *kafka.KafkaProducer
-	kafkaConsumer *kafka.KafkaConsumer
-	poolPayoutAddr btcutil.Address
-	done chan struct{}
+	config *config.JobMakerConfig
+	kafkaProducer       *kafka.KafkaProducer
+	kafkaRawGbtConsumer *kafka.KafkaConsumer
+	redis *redis.Client
+	poolPayoutAddr      btcutil.Address
+	latestGbtHeight int64
+	done                chan struct{}
 }
 
-func NewJobMaker(chainParams *chaincfg.Params, payoutAddress string, brokers string) (*JobMaker, error) {
+func NewJobMaker(config *config.JobMakerConfig, redisClient *redis.Client, chainParams *chaincfg.Params, payoutAddress string, brokers string) (*JobMaker, error) {
 	poolPayoutAddr, err := btcutil.DecodeAddress(payoutAddress, chainParams)
 	if err != nil {
 		return nil, err
 	}
 	return &JobMaker{
-		kafkaProducer: kafka.NewKafkaProducer(brokers, kafka.KafkaTopicStratumJob),
-		kafkaConsumer: kafka.NewKafkaConsumer(brokers, kafka.KafkaTopicRawGBT, 0),
-		poolPayoutAddr: poolPayoutAddr,
-		done: make(chan struct{}),
+		config: config,
+		redis: redisClient,
+		kafkaProducer:       kafka.NewKafkaProducer(brokers, kafka.KafkaTopicStratumJob),
+		kafkaRawGbtConsumer: kafka.NewKafkaConsumer(brokers, kafka.KafkaTopicRawGBT, 0),
+		poolPayoutAddr:      poolPayoutAddr,
+		latestGbtHeight: 0,
+		done:                make(chan struct{}),
 	}, nil
 }
 
@@ -46,17 +56,16 @@ func (maker *JobMaker) Init() error {
 		return err
 	}
 
-	maker.kafkaConsumer.Conf.Consumer.MaxWaitTime = 5 * time.Millisecond
-	if err := maker.kafkaConsumer.Setup(); err != nil {
+	//maker.kafkaRawGbtConsumer.Conf.Consumer.MaxWaitTime = 5 * time.Millisecond
+	if err := maker.kafkaRawGbtConsumer.Setup(); err != nil {
 		return err
 	}
-	
+
 	return nil
 }
 
 func (maker *JobMaker) Run() error {
-
-	pc, err := maker.kafkaConsumer.Consume(sarama.OffsetNewest)
+	pc, err := maker.kafkaRawGbtConsumer.Consume(sarama.OffsetNewest)
 	if err != nil {
 		return err
 	}
@@ -66,32 +75,87 @@ func (maker *JobMaker) Run() error {
 		for {
 			select {
 			case msg := <-pc.Messages():
-				maker.consumeRawGbtMsg(msg)
-			case consume_done:
+				if err := maker.consumeRawGbtMsg(msg.Value); err != nil {
+					glog.Error(err)
+				}
+			case <-consume_done:
 				return
 			}
 		}
 	}()
 
 	<-maker.done
-	consume_done <- struct {}{}
+	consume_done <- struct{}{}
 	return nil
 }
 
 func (maker *JobMaker) Stop() error {
-	maker.done <- struct {}{}
+	glog.Info("JobMaker stop")
+	maker.done <- struct{}{}
+	if err := maker.kafkaProducer.Close(); err != nil {
+		glog.Error(err)
+	}
+	if err := maker.kafkaRawGbtConsumer.Close(); err != nil {
+		glog.Error(err)
+	}
 	return nil
 }
 
-func (maker *JobMaker) consumeRawGbtMsg(msg *sarama.ConsumerMessage)  {
-	glog.Info("received rawgbt message, len: ", len(msg.Value))
-}
-
-func (maker *JobMaker) addRawgbt(msgValue []byte) error {
+func (maker *JobMaker) consumeRawGbtMsg(value []byte) error {
+	glog.Info("received rawgbt message, len: ", len(value))
 	var rawgbt gbtmaker.RawGbt
-	if err := json.Unmarshal(msgValue, &rawgbt); err != nil {
+	if err := json.Unmarshal(value, &rawgbt); err != nil {
 		return err
 	}
+	
+	if err := maker.checkRawGbt(&rawgbt); err != nil {
+		return err
+	}
+	
+	return maker.sendStratumJob(&rawgbt)
+}
 
+func (maker *JobMaker) checkRawGbt(rawgbt *gbtmaker.RawGbt) error {
+	// 检查创建时间
+	now := time.Now()
+	if now.Add(-time.Minute).After(rawgbt.CreatedAt) {
+		glog.Warningf("rawgbt diff time is more than 60, ingore it. now = %d, create at = %d", now, rawgbt.CreatedAt)
+		return nil
+	}
+	if now.Add(-3 * time.Second).After(rawgbt.CreatedAt) {
+		glog.Warning("rawgbt diff time is too large: ", now.Sub(rawgbt.CreatedAt).Seconds(), " seconds")
+	}
+
+	// 检查height
+	if rawgbt.BlockTemplate.Height < maker.latestGbtHeight {
+		glog.Warningf("gbt height: %d lower latest: %d", rawgbt.BlockTemplate.Height, maker.latestGbtHeight)
+		return nil
+	}
+
+	// 检查hash
+	_, err := maker.redis.Get(rawgbt.Hash).Result()
+	if err == nil {
+		return errors.New("duplicate gbt hash: " + rawgbt.Hash)
+	}
+	if err != redis.Nil {
+		return err
+	}
+	maker.redis.Set(rawgbt.Hash, true, time.Hour)
+	maker.latestGbtHeight = rawgbt.BlockTemplate.Height
+	glog.Infof("receive rawgbt, height: %d, gbthash: %s, gbtTime(UTC): %d", rawgbt.BlockTemplate.Height, rawgbt.Hash, rawgbt.CreatedAt.Unix())
 	return nil
+}
+
+func (maker *JobMaker) sendStratumJob(rawgbt *gbtmaker.RawGbt) error {
+	job, err := sserver.InitFromGbt(rawgbt, maker.config.Pool_coinbase, maker.poolPayoutAddr, maker.config.Block_version)
+	if err != nil {
+		return err
+	}
+	glog.Info("init from gbt, job id = ", job.JobId)
+	jobBytes, err := json.Marshal(job)
+	if err != nil {
+		return err
+	}
+	glog.Infof("submit to kafka topic = %s, msg len = %d", kafka.KafkaTopicStratumJob, len(jobBytes))
+	return maker.kafkaProducer.Produce(sarama.ByteEncoder(jobBytes))
 }

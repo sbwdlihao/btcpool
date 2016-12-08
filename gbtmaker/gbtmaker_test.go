@@ -14,6 +14,7 @@ import (
 var maker *GbtMaker
 
 func TestMain(m *testing.M) {
+	flag.Parse()
 	flag.Lookup("logtostderr").Value.Set("true")
 	btc_rpc_client_config := &btcrpcclient.ConnConfig{
 		Host: "127.0.0.1:19001",

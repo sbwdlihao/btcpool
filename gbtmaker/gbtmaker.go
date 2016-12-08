@@ -38,11 +38,11 @@ type GbtMakerInterface interface {
 
 type GbtMaker struct {
 	zmqBitcoindAddr string
-	kRpcCallInterval time.Duration
+	kRpcCallInterval int64
 	isCheckZmq bool
 	kafkaProducer *kafka.KafkaProducer
 	bitcoindRpcClient *btcrpcclient.Client
-	lastCheckTime time.Time
+	lastCheckTime time.Time // The zero value of type Time is January 1, year 1, 00:00:00.000000000 UTC
 	checkTimeUpdate chan struct{}
 	done chan struct{}
 }
@@ -50,7 +50,7 @@ type GbtMaker struct {
 func NewGbtMaker(gbtMakerConfig config.GbtMakerConfig, zmqBitcoindAddr string, kafkaBrokers string, bitcoindRpcClient *btcrpcclient.Client) *GbtMaker {
 	return &GbtMaker{
 		zmqBitcoindAddr: zmqBitcoindAddr,
-		kRpcCallInterval: time.Duration(gbtMakerConfig.Rpcinterval) * time.Second,
+		kRpcCallInterval: gbtMakerConfig.Rpcinterval,
 		isCheckZmq: gbtMakerConfig.Is_check_zmq,
 		kafkaProducer: kafka.NewKafkaProducer(kafkaBrokers, kafka.KafkaTopicRawGBT),
 		bitcoindRpcClient: bitcoindRpcClient,
@@ -83,6 +83,9 @@ func (maker *GbtMaker) Init() error {
 func (maker *GbtMaker) Run() error {
 	glog.Info("Gbt Running ......")
 
+	// 开始运行后立即获取一次block template
+	maker.submitRawGbtMsg(false)
+
 	recv_zmq_done := make(chan struct{})
 	go func() {
 		for {
@@ -92,6 +95,7 @@ func (maker *GbtMaker) Run() error {
 					glog.Error(err)
 					break // break select statement
 				}
+				maker.checkTimeUpdate <- struct {}{}
 				if err := maker.submitRawGbtMsg(false); err != nil {
 					glog.Error(err)
 				}
@@ -103,7 +107,8 @@ func (maker *GbtMaker) Run() error {
 
 	}()
 
-	ticker := time.NewTicker(maker.kRpcCallInterval)
+	d := time.Duration(maker.kRpcCallInterval) * time.Second
+	ticker := time.NewTicker(d)
 	check_time_done := make(chan struct{})
 	go func() {
 		for {
@@ -112,7 +117,7 @@ func (maker *GbtMaker) Run() error {
 				maker.submitRawGbtMsg(true)
 			case <- maker.checkTimeUpdate:
 				ticker.Stop()
-				ticker = time.NewTicker(maker.kRpcCallInterval)
+				ticker = time.NewTicker(d)
 			case <- check_time_done:
 				ticker.Stop()
 				return
@@ -129,6 +134,9 @@ func (maker *GbtMaker) Run() error {
 func (maker *GbtMaker) Stop() error {
 	glog.Info("GbtMaker stop")
 	maker.done <- struct {}{}
+	if err := maker.kafkaProducer.Close(); err != nil {
+		glog.Error(err)
+	}
 	return nil
 }
 
@@ -186,24 +194,22 @@ func (maker *GbtMaker) recvZmqMessage(msgType string) chan error {
 }
 
 func (maker *GbtMaker) submitRawGbtMsg(checkTime bool) error {
-	if checkTime && time.Now().Sub(maker.lastCheckTime) < maker.kRpcCallInterval {
-		glog.Warning("submit raw bgt msg too often")
+	now := time.Now()
+	// 用Unix比较，如果直接用Time比较，则精度到了纳秒，不一定能满足要求，比如10:17:07.009849463 10:17:02.011921738
+	if checkTime && now.Unix() - maker.lastCheckTime.Unix() < maker.kRpcCallInterval {
+		glog.Warning("submit raw bgt msg too often ", now.Unix(), maker.lastCheckTime.Unix())
 		return nil
 	}
-
+	maker.lastCheckTime = time.Now()
 	raw_gbt_msg, err := maker.makeRawGbtMsg()
 	if err != nil {
 		return err
 	}
 	// submit to Kafka
-	glog.Info("sumbit to Kafka, msg len: ", len(raw_gbt_msg))
+	glog.Infof("submit to kafka topic = %s, msg len = %d", kafka.KafkaTopicRawGBT, len(raw_gbt_msg))
 	if err := maker.kafkaProducer.Produce(sarama.ByteEncoder(raw_gbt_msg)); err != nil {
 		return err
 	}
-	go func() {
-		maker.lastCheckTime = time.Now()
-		maker.checkTimeUpdate <- struct {}{}
-	}()
 	return nil
 }
 
@@ -211,11 +217,11 @@ func (maker *GbtMaker) makeRawGbtMsg() ([]byte, error) {
 	request := &btcjson.TemplateRequest{}
 	result, err := maker.bitcoindRpcClient.GetBlockTemplate(request)
 	if err != nil {
-		return "", err
+		return nil, err
 	}
 	gbthash, err := util.HashBlockTemplateResult(result)
 	if err != nil {
-		return "", err
+		return nil, err
 	}
 	glog.Infof("gbt height: %d, " +
 		"prev_hash: %s, " +
@@ -237,13 +243,13 @@ func (maker *GbtMaker) makeRawGbtMsg() ([]byte, error) {
 		Hash: gbthash,
 	})
 	if err != nil {
-		return "", err
+		return nil, err
 	}
 	return msg, nil
 }
 
 type RawGbt struct {
 	CreatedAt time.Time
-	BlockTemplate btcjson.GetBlockTemplateResult
+	BlockTemplate *btcjson.GetBlockTemplateResult
 	Hash string
 }

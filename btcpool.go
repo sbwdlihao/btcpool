@@ -15,10 +15,11 @@ import (
 	"github.com/btcrpcclient"
 	"github.com/btcpool/gbtmaker"
 	"github.com/btcsuite/btcd/chaincfg"
+	"gopkg.in/redis.v5"
 )
 
 func usage() {
-	fmt.Fprintln(os.Stderr, "Usage:\n\tbtcpool -c \"config.yml\" -l \"log_dir\"\n")
+	fmt.Fprintln(os.Stderr, "Usage:\n\tbtcpool -c \"config.yml\" -l \"log_dir\"")
 }
 
 func main() {
@@ -87,6 +88,17 @@ func main() {
 	btc_rpc_client, err := btcrpcclient.New(btc_rpc_client_config, nil)
 	if err != nil {
 		glog.Error("bitcoind rpc connect failed: ", err)
+		os.Exit(1)
+	}
+
+	redis_client := redis.NewClient(&redis.Options{
+		Addr: cfg.Redis.Address,
+		Password: cfg.Redis.Password,
+		DB: cfg.Redis.DB,
+	})
+	err = redis_client.Ping().Err()
+	if err != nil {
+		glog.Error("redis connect failed: ", err)
 		os.Exit(1)
 	}
 
